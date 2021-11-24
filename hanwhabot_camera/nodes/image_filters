@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+import rospy
+from sensor_msgs.msg import Image
+from std_msgs.msg import Int16
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+
+class FilteredImage(object):
+    def __init__(self):
+        self.hsv_l = np.array([1,2,3]) #(1,2,3)
+        self.hsv_h = (1,2,3) #(1,2,3)
+
+        self.image_calibration = True
+
+        self.image_filter_type = None # hsv, hsl, gray2threshold
+        self.cvbridge = CvBridge()
+
+        self.fraction_num_in_roi_pub = rospy.Publisher("image_fraction", Int16, queue_size=1)
+        self.fraction_num_in_roi = Int16()
+        self.image_pub = rospy.Publisher("/iamge_filtered", Image, queue_size=1)
+
+        self.image_sub = rospy.Subscriber("image_projection", Image, self.filter_image, queue_size=5)
+
+        # python roi is img[y:y+h, x:x+w]
+        self.roi = None
+        # image size is 640 480 only. 
+
+    def filter_image(self, msg):
+        self.cv_img = self.cvbridge.imgmsg_to_cv2(msg, "bgr8")
+        # roi 100 ~ 540, 100 ~ 150
+        # self.roi = self.roi[100:150, 100:540]
+        if self.image_filter_type == "hsv":
+            self.cv_hsv_img = cv2.cvtColor(self.cv_img, cv2.COLOR_BGR2HSV)
+            self.white_mask = cv2.inRange(self.hsv_img, hsv_l, hsv_h)
+            # roi
+            self.white_mask_roi = self.white_mask[100:150,100:540]
+            self.fraction_num_in_roi = np.count_nonzero(self.white_mask_roi)
+
+            self.hsv_result = cv2.bitwise_and(self.cv_hsv_img, self.cv_hsv_img, mask = self.white_mask)
+            self.msg_hsv_img = self.cvbridge.cv2_to_imgmsg(self.hsv_result, encoding="passthrough")
+            # it is 
+            self.image_pub.publish(self.msg_hsv_img)
+            self.fraction_num_in_roi_pub(self.fraction_num_in_roi)
+
+
+        elif self.image_filter_type == "gray2threshold":
+            # gray scale image
+            self.cv_gray_img = cv2.cvtColor(self.cv_img, cv2.COLOR_BGR2GRAY)
+            _, self.gray_mask = cv2.threshold(self.cv_gray_img, 127, 255, cv2.THRESH_BINARY)
+            self.gray_mask_roi = self.gray_mask[100:150, 100:540]
+            # publish filtered image
+            self.img_gray = self.cvbridge.cv2_to_imgmsg(self.gray_mask)
+            # calculate fraction num and publish it
+            self.fraction_num_in_roi = np.count_nonzero(self.gray_mask_roi)
+            self.image_pub.publish(self.img_gray)
+            self.fraction_num_in_roi_pub.publish(self.fraction_num_in_roi)
+
+    def main(self):
+        rospy.spin()
+
+if __name__ == "__main__":
+    rospy.init_node("filtered_image")
+    node = FilteredImage()
+    node.main()

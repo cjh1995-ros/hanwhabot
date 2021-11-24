@@ -1,0 +1,8 @@
+#goal definition
+bool get_start
+---
+#result definition
+bool have_start
+---
+#feedback
+string string_name
