@@ -11,94 +11,13 @@ class DetectLane(object):
     def __init__(self):
         self.cvbridge = CvBridge()
         self.cv_msg = None
-        self.sub_filtered_img = rospy.Subscriber("filtered_image", Image,self.get_image, queue_size=1)
+        self.sub_filtered_img = rospy.Subscriber("filtered_image", Image, self.make_lane, queue_size=1)
         self.pub_lane_img =  rospy.Publisher("lane_image", Image, queue_size=1)
-        self.histogram = None
-        self.margin = int((1/10)*self.width) # you have to give self.width
-        self.num_of_windows = 10
-        self.minpix = int((1/20)*self.width)
+        self.hue_white_l = rospy.get_param("~detect/lane/white/hue_l", 0)
+        self.hue_white_h = rospy.get_param("~detect/lane/white/hue_h", 25)
+        self.saturation_white_l = rospy.get_param("~detect/lane/white/saturation_l", 0)
+        self.saturation_white_h = rospy.get_param("~detect/lane/white/saturation_h", 36)
+        self.lightness_white_l = rospy.get_param("~detect/lane/white/lightness_l", 180)
+        self.lightness_white_h = rospy.get_param("~detect/lane/white/lightness_h", 255)
 
-        self.left_fit = None
-        self.right_fit = None
-        self.left_lane_inds = None
-        self.right_lane_inds = None
-        self.ploty = None
-        self.left_fitx = None
-        self.right_fitx = None
-        self.leftx = None
-        self.rightx = None
-        self.lefty = None
-        self.righty = None
-            
-        # Pixel parameters for x and y dimensions
-        self.YM_PER_PIX = 10.0 / 1000 # meters per pixel in y dimension
-        self.XM_PER_PIX = 3.7 / 781 # meters per pixel in x dimension
-            
-        # Radii of curvature and offset
-        self.left_curvem = None
-        self.right_curvem = None
-        self.center_offset = None
-
-    ############# image filter ##############
-    def binary_array(self, array, thresh, value=0):
-    #  this is for 2d binary mask which is already done
-        if value == 0:
-            self.binary = np.ones_link(array)
-
-        else:
-            self.binary = np.zeros_like(array)
-            value = 1
-        self.binary[(array >= thresh[0]) & array<=thresh[1]] = value
-        return self.binary
-
-    def blur_gaussian(self, channel, ksize = 3):
-        # blurring
-        return cv2.GaussianBlur(channel, (ksize, ksize))
-
-    def mag_thresh(self, image, sobel_kernel = 3, thresh=(0,255)):
-        # this is for finding where is hard edge detected
-        sobelx = np.absolute(sobel(image, orient='x', sobel_kernel=sobel_kernel))
-        sobely = np.absolute(sobel(image, orient='y', sobel_kernel=sobel_kernel))
-        mag = np.sqrt(sobelx **2 + sobely **2)
-        return binary_array(mag, thresh)
-
-    def sobel(self, img_channel, orient='x', sobel_kernel=3):
-        if orient == 'x':
-            sobel = cv2.Sobel(img_channel, cv2.CV_64F, 1, sobel_kernel)
-        if orient == 'y':
-            sobel = cv2.Sobel(img_channel, cv2.CV_64F, 0, sobel_kernel)
-        return sobel
-
-    def threshold(self, channel, thresh=(128,255), thresh_type=cv2.THRESH_BINARY):
-        return cv2.threshold(channel, thresh[0], thresh[1])
-    ############# image filter ##############
-
-    ############# get lane     ###############
-    def calculate_car_position(self, print_to_terminal=False):
-        """
-        Calculate the position of the car relative to the center
-            
-        :param: print_to_terminal Display data to console if True       
-        :return: Offset from the center of the lane
-        """
-        # Assume the camera is centered in the image.
-        # Get position of car in centimeters
-        car_location = self.orig_frame.shape[1] / 2
-    
-        # Fine the x coordinate of the lane line bottom
-        height = self.orig_frame.shape[0]
-        bottom_left = self.left_fit[0]*height**2 + self.left_fit[
-        1]*height + self.left_fit[2]
-        bottom_right = self.right_fit[0]*height**2 + self.right_fit[
-        1]*height + self.right_fit[2]
-    
-        center_lane = (bottom_right - bottom_left)/2 + bottom_left 
-        center_offset = (np.abs(car_location) - np.abs(
-        center_lane)) * self.XM_PER_PIX * 100
-    
-        if print_to_terminal == True:
-        print(str(center_offset) + 'cm')
-                
-        self.center_offset = center_offset
-        
-        return center_offset
+    def 
