@@ -13,17 +13,10 @@
       <origin xyz="-0.032 0 0.0" rpy="0 0 0"/>
       <geometry>
         <!-- plz input right value -->
-        <box size="0.140 0.140 0.30"/>
+        <box size="0.680 0.465 0.30"/>
       </geometry>
       <material name="light_black"/>
     </visual>
-
-    <collision>
-      <origin xyz="-0.032 0 0.070" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.140 0.140 0.143"/>
-      </geometry>
-    </collision>
   </link>
 
   <joint name="wheel_left_joint" type="continuous">
