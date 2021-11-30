@@ -1,0 +1,25 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+import rospy
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Int16
+from std_srvs.srv import *
+import time
+
+
+# 조건을 충족하면 메인에 움직임을 요구할까?
+
+"""어떤 미션이냐에 따라 subscribe하는 topic, service가 달라지게 하기"""
+def init():
+    client = rospy.ServiceProxy("main", SetBool)
+    x = SetBoolRequest()
+    x.data = True
+    result = SetBoolResponse()
+    result = client(x)
+    return result
+rospy.init_node("test")
+a = init()
+print(a.message)
+print(a.success)

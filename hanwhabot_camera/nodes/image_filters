@@ -10,6 +10,9 @@ import cv2
 import numpy as np
 
 class FilteredImage(object):
+    """  this is sending filtered image and fraction numbers 
+         threshold with hsv or just gray scale.
+    """
     def __init__(self):
         self.hsv_l = np.array([1,2,3]) #(1,2,3)
         self.hsv_h = (1,2,3) #(1,2,3)

@@ -1,23 +1,349 @@
-#! /usr/bin/env python
+#!/usr/bin/env python
+
 import rospy
-import cv2
 import numpy as np
-from sensor_msgs.msg import Image
-from std_msgs.msg import Int16()
+import cv2
 from cv_bridge import CvBridge
+from std_msgs.msg import UInt8, Float64
+from sensor_msgs.msg import Image, CompressedImage
 
-
-class DetectLane(object):
+class DetectLane():
     def __init__(self):
-        self.cvbridge = CvBridge()
-        self.cv_msg = None
-        self.sub_filtered_img = rospy.Subscriber("filtered_image", Image, self.make_lane, queue_size=1)
-        self.pub_lane_img =  rospy.Publisher("lane_image", Image, queue_size=1)
-        self.hue_white_l = rospy.get_param("~detect/lane/white/hue_l", 0)
-        self.hue_white_h = rospy.get_param("~detect/lane/white/hue_h", 25)
-        self.saturation_white_l = rospy.get_param("~detect/lane/white/saturation_l", 0)
-        self.saturation_white_h = rospy.get_param("~detect/lane/white/saturation_h", 36)
-        self.lightness_white_l = rospy.get_param("~detect/lane/white/lightness_l", 180)
-        self.lightness_white_h = rospy.get_param("~detect/lane/white/lightness_h", 255)
+        self.hue_white_l, self.saturation_white_l, self.lightness_white_l = 0, 0, 180 
+        self.hue_white_h, self.saturation_white_h, self.lightness_white_h = 25, 36, 255
 
-    def 
+        self.hue_yellow_l, self.saturation_yellow_l, self.lightness_yellow_l = 27, 130, 160
+        self.hue_yellow_d, self.saturation_yellow_d, self.lightness_yellow_d = 41, 255, 255
+
+        self.is_calibration_mode = False
+
+        self.sub_image_type = "raw"         # you can choose image type "compressed", "raw"
+        self.pub_image_type = "compressed"  # you can choose image type "compressed", "raw"
+
+        if self.sub_image_type == "compressed":
+            # subscribes compressed image
+            self.sub_image_original = rospy.Subscriber('/detect/image_input/compressed', CompressedImage, self.cbFindLane, queue_size = 1)
+        elif self.sub_image_type == "raw":
+            # subscribes raw image, topic -> /usb_cam/image_raw
+            self.sub_image_original = rospy.Subscriber('/detect/image_input', Image, self.cbFindLane, queue_size = 1)
+
+        if self.pub_image_type == "compressed":
+            # publishes lane image in compressed type, topic -> /usb_cam/image_raw/compressed
+            self.pub_image_lane = rospy.Publisher('/detect/image_output/compressed', CompressedImage, queue_size = 1)
+            self.pub_image_stop_lane = rospy.Publisher('/detect/image_stop_line', CompressedImage, queue_size=1)
+        elif self.pub_image_type == "raw":
+            # publishes lane image in raw type
+            self.pub_image_lane = rospy.Publisher('/detect/image_output', Image, queue_size = 1)
+
+        self.pub_lane = rospy.Publisher('/detect/lane', Float64, queue_size = 1)
+        self.detect_num_of_stop_line = 0        
+        self.roi_srv = 
+        
+        self.cvBridge = CvBridge()
+
+        self.counter = 1
+
+        self.window_width = 1000.
+        self.window_height = 600.
+
+        self.reliability_white_line = 100
+        self.reliability_yellow_line = 100
+
+    # find lane with hsv
+    def cbFindLane(self, image_msg):
+        # TODO: mov_avg error
+
+        # Change the frame rate by yourself. Now, it is set to 1/3 (10fps). 
+        # Unappropriate value of frame rate may cause huge delay on entire recognition process.
+        # This is up to your computer's operating power.
+        if self.sub_image_type == "compressed":
+            #converting compressed image to opencv image
+            np_arr = np.fromstring(image_msg.data, np.uint8)
+            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        # This is Our Case
+        elif self.sub_image_type == "raw":
+            cv_image = self.cvBridge.imgmsg_to_cv2(image_msg, "bgr8")
+
+        # find White and Yellow Lanes
+        left_fraction, right_fraction, roi_fraction, cv_white_lane = self.maskWhiteLane(cv_image)
+        if roi_fraction >= 10000:
+            """publish stop srv!"""
+            self.detect_num_of_stop_line += 1
+            
+        try:
+            if left_fraction > 3000 and right_fraction > 3000:
+                self.left_fitx, self.right_fitx, self.left_fit, self.right_fit = self.fit_from_lines(self.left_fit, self.right_fit, cv_white_lane)
+                self.mov_avg_right = np.append(self.mov_avg_right,np.array([self.right_fit]), axis=0)
+        except:
+            if left_fraction > 3000 and right_fraction > 3000:
+                self.left_fitx, self.right_fitx, self.left_fit, self.right_fit = self.sliding_windown(cv_white_lane, 'right')
+                self.mov_avg_right = np.array([self.right_fit])
+
+        MOV_AVG_LENGTH = 5
+
+        self.left_fit = np.array([np.mean(self.mov_avg_left[::-1][:, 0][0:MOV_AVG_LENGTH]),
+                            np.mean(self.mov_avg_left[::-1][:, 1][0:MOV_AVG_LENGTH]),
+                            np.mean(self.mov_avg_left[::-1][:, 2][0:MOV_AVG_LENGTH])])
+        self.right_fit = np.array([np.mean(self.mov_avg_right[::-1][:, 0][0:MOV_AVG_LENGTH]),
+                            np.mean(self.mov_avg_right[::-1][:, 1][0:MOV_AVG_LENGTH]),
+                            np.mean(self.mov_avg_right[::-1][:, 2][0:MOV_AVG_LENGTH])])
+
+        if self.mov_avg_left.shape[0] > 1000:
+            self.mov_avg_left = self.mov_avg_left[0:MOV_AVG_LENGTH]
+
+        if self.mov_avg_right.shape[0] > 1000:
+            self.mov_avg_right = self.mov_avg_right[0:MOV_AVG_LENGTH]
+
+        # left and right is distincted with color. we use only white color so sliding window method must be changed
+        # self.make_lane(cv_image, white_fraction, yellow_fraction)
+        
+        # PLZ Correct This!
+        self.make_lane(cv_image, left_white_fraction, right_white_fraction)
+
+    def maskWhiteLane(self, image):
+        # Convert BGR to HSV
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        Hue_l = self.hue_white_l
+        Hue_h = self.hue_white_h
+        Saturation_l = self.saturation_white_l
+        Saturation_h = self.saturation_white_h
+        Lightness_l = self.lightness_white_l
+        Lightness_h = self.lightness_white_h
+
+        # define range of white color in HSV
+        lower_white = np.array([Hue_l, Saturation_l, Lightness_l])
+        upper_white = np.array([Hue_h, Saturation_h, Lightness_h])
+
+        # Threshold the HSV image to get only white colors
+        mask = cv2.inRange(hsv, lower_white, upper_white)
+        m_height, m_width, _ = mask.shape
+        x_mid_point, y_mid_point = int(m_width/2), int(m_height/2)
+        # Bitwise-AND mask and original image
+        res = cv2.bitwise_and(image, image, mask = mask)
+
+        left_fraction_num = np.count_nonzero(mask[:, :x_mid_point])
+        right_fraction_num = np.count_nonzero(mask[:, x_mid_point:])
+        roi_fraction_num = np.count_nonzero(mask[y_mid_point-200 : y_mid_point-100, x_mid_point-200: x_mid_point+200])
+
+        return left_fraction_num, right_fraction_num, roi_fraction_num, mask
+
+    ################### left, right 로 만들어야함! ###################
+#    def fit_from_lines(self, lane_fit, image): # lane fit & white lane image
+    def fit_from_lines(self, left_lane_fit, right_lane_fit, image): # lane fit & white lane image
+
+        nonzero = image.nonzero() # 0이 아닌 놈들의 index를 mat으로 반환함.
+        nonzeroy = np.array(nonzero[0])
+
+        left_nonzerox = np.array(nonzero[1])
+        right_nonzerox = np.array(nonzero[1])
+
+        margin = 100
+        left_lane_inds = ((left_nonzerox > (left_lane_fit[0] * (nonzeroy ** 2) + left_lane_fit[1] * nonzeroy + left_lane_fit[2] - margin)) & (
+        left_nonzerox < (left_lane_fit[0] * (nonzeroy ** 2) + left_lane_fit[1] * nonzeroy + left_lane_fit[2] + margin)))
+        right_lane_inds = ((right_nonzerox > (right_lane_fit[0] * (nonzeroy ** 2) + right_lane_fit[1] * nonzeroy + right_lane_fit[2] - margin)) & (
+        right_nonzerox < (right_lane_fit[0] * (nonzeroy ** 2) + right_lane_fit[1] * nonzeroy + right_lane_fit[2] + margin)))
+
+        # Again, extract line pixel positions
+        left_x = left_nonzerox[left_lane_inds]
+        left_y = nonzeroy[lane_inds]
+
+        right_x = right_nonzerox[right_lane_inds]
+        right_y = nonzeroy[right_lane_inds]
+
+
+        # Fit a second order polynomial to each
+        left_lane_fit = np.polyfit(left_y, left_x, 2)
+        right_lane_fit = np.polyfit(right_y, right_x, 2)
+
+        # Generate x and y values for plotting
+        ploty = np.linspace(0, image.shape[0] - 1, image.shape[0])
+        left_lane_fitx = left_lane_fit[0] * ploty ** 2 + left_lane_fit[1] * ploty + left_lane_fit[2]
+        right_lane_fitx = right_lane_fit[0] * ploty ** 2 + right_lane_fit[1] * ploty + right_lane_fit[2]
+        # fitx = ax^2 + bx + c & fit = a, b, c
+        return left_lane_fitx, right_lane_fitx, left_lane_fit, right_lane_fit 
+
+
+
+    def sliding_windown(self, img_w): # image and choose left or right
+        histogram = np.sum(img_w[img_w.shape[0] / 2:, :], axis=0)
+
+        # Create an output image to draw on and visualize the result
+        out_img = np.dstack((img_w, img_w, img_w)) * 255
+
+        # Find the peak of the left and right halves of the histogram
+        # These will be the starting point for the left and right lines
+        midpoint = np.int(histogram.shape[0] / 2)
+
+        left_lane_base = np.argmax(histogram[:midpoint])
+        right_lane_base = np.argmax(histogram[midpoint:]) + midpoint
+
+        # Choose the number of sliding windows
+        nwindows = 20
+
+        # Set height of windows
+        window_height = np.int(img_w.shape[0] / nwindows)
+
+        # Identify the x and y positions of all nonzero pixels in the image
+        nonzero = img_w.nonzero()
+        left_nonzeroy = np.array(nonzero[0])
+        right_nonzeroy = np.array(nonzero[0])
+        left_nonzerox = np.array(nonzero[1])
+        right_nonzerox = np.array(nonzero[1])
+
+        # Current positions to be updated for each window
+        left_x_current = left_lane_base
+        right_x_current = right_lane_base
+
+        # Set the width of the windows +/- margin
+        margin = 50
+
+        # Set minimum number of pixels found to recenter window
+        minpix = 50
+
+        # Create empty lists to receive lane pixel indices
+        left_lane_inds = []
+        right_lane_inds = []
+
+        # Step through the windows one by one
+        for window in range(nwindows):
+            # x, y = [None, None, None, None], [None, None]
+            # Identify window boundaries in x and y
+            win_y_low = img_w.shape[0] - (window + 1) * window_height
+            win_y_high = img_w.shape[0] - window * window_height
+            left_win_x_low = left_x_current - margin
+            right_win_x_high = right_x_current + margin
+
+            # Draw the windows on the visualization image
+            # left
+            cv2.rectangle(out_img, (left_win_x_low, win_y_low), (left_win_x_high, win_y_high), (0, 255, 0), 2)
+            # right
+            cv2.rectangle(out_img, (right_win_x_low, win_y_low), (right_win_x_high, win_y_high), (0, 255, 0), 2)
+
+            # Identify the nonzero pixels in x and y within the window
+            left_good_lane_inds = ((left_nonzeroy >= win_y_low) & (left_nonzeroy < win_y_high) & (left_nonzerox >= left_win_x_low) & (left_nonzerox < left_win_x_high)).nonzero()[0]
+            right_good_lane_inds = ((right_nonzeroy >= win_y_low) & (right_nonzeroy < win_y_high) & (right_nonzerox >= right_win_x_low) & (right_nonzerox < right_win_x_high)).nonzero()[0]
+
+            # Append these indices to the lists
+            left_lane_inds.append(left_good_lane_inds)
+            right_lane_inds.append(right_good_lane_inds)
+
+            # If you found > minpix pixels, recenter next window on their mean position
+            if len(left_good_lane_inds) > minpix:
+                left_x_current = np.int(np.mean(left_nonzerox[left_good_lane_inds]))
+
+            if len(right_good_lane_inds) > minpix:
+                right_x_current = np.int(np.mean(right_nonzerox[right_good_lane_inds]))
+
+        # Concatenate the arrays of indices
+        left_lane_inds = np.concatenate(left_lane_inds)
+        right_lane_inds = np.concatenate(right_lane_inds)
+
+        # Extract line pixel positions
+        left_x = left_nonzerox[left_lane_inds]
+        left_y = left_nonzeroy[left_lane_inds]
+        right_x = left_nonzerox[right_lane_inds]
+        right_y = left_nonzeroy[right_lane_inds]
+
+        # Fit a second order polynomial to each
+        try:
+            left_lane_fit = np.polyfit(left_y, left_x, 2)
+            self.left_lane_fit_bef = left_lane_fit
+            right_lane_fit = np.polyfit(right_y, right_x, 2)
+            self.right_lane_fit_bef = right_lane_fit
+        except:
+            left_lane_fit = self.left_lane_fit_bef #
+            right_lane_fit = self.right_lane_fit_bef # self.lane_fit_bef 로 라인 그리나 봄.
+
+        # Generate x and y values for plotting
+        ploty = np.linspace(0, img_w.shape[0] - 1, img_w.shape[0])
+        left_lane_fitx = left_lane_fit[0] * ploty ** 2 + left_lane_fit[1] * ploty + left_lane_fit[2]
+        right_lane_fitx = right_lane_fit[0] * ploty ** 2 + right_lane_fit[1] * ploty + right_lane_fit[2]
+
+        return left_lane_fitx, right_lane_fitx, left_lane_fit, right_lane_fit
+
+    def make_lane(self, cv_image, left_fraction, right_fraction):
+
+        # Create an image to draw the lines on
+        warp_zero = np.zeros((cv_image.shape[0], cv_image.shape[1], 1), dtype=np.uint8)
+
+        color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+        color_warp_lines = np.dstack((warp_zero, warp_zero, warp_zero))
+
+        ploty = np.linspace(0, cv_image.shape[0] - 1, cv_image.shape[0])
+
+        if left_fraction > 3000:
+            pts_left = np.array([np.flipud(np.transpose(np.vstack([self.left_fitx, ploty])))])
+            cv2.polylines(color_warp_lines, np.int_([pts_left]), isClosed=False, color=(0, 0, 255), thickness=25)
+
+        if right_fraction > 3000:
+            pts_right = np.array([np.transpose(np.vstack([self.right_fitx, ploty]))])
+            cv2.polylines(color_warp_lines, np.int_([pts_right]), isClosed=False, color=(255, 255, 0), thickness=25)
+        
+        self.is_center_x_exist = True
+
+        try:
+            if left_fraction > 3000 and right_fraction > 3000:
+                centerx = np.mean([self.left_fitx, self.right_fitx], axis=0)
+                pts = np.hstack((pts_left, pts_right))
+                pts_center = np.array([np.transpose(np.vstack([centerx, ploty]))])
+
+                cv2.polylines(color_warp_lines, np.int_([pts_center]), isClosed=False, color=(0, 255, 255), thickness=12)
+
+                # Draw the lane onto the warped blank image
+                cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+
+            if left_fraction > 3000 and right_fraction <= 3000:
+                centerx = np.subtract(self.right_fitx, 320)
+                pts_center = np.array([np.transpose(np.vstack([centerx, ploty]))])
+
+                cv2.polylines(color_warp_lines, np.int_([pts_center]), isClosed=False, color=(0, 255, 255), thickness=12)
+
+            if left_fraction <= 3000 and right_fraction > 3000:
+                centerx = np.add(self.left_fitx, 320) # 640/2
+                pts_center = np.array([np.transpose(np.vstack([centerx, ploty]))])
+
+                cv2.polylines(color_warp_lines, np.int_([pts_center]), isClosed=False, color=(0, 255, 255), thickness=12)
+
+        except:
+            self.is_center_x_exist = False
+            pass
+        # elif self.reliability_white_line <= 50 and self.reliability_yellow_line > 50:
+        #     centerx = np.add(self.left_fitx, 320)
+        #     pts_center = np.array([np.transpose(np.vstack([centerx, ploty]))])
+
+        #     cv2.polylines(color_warp_lines, np.int_([pts_center]), isClosed=False, color=(0, 255, 255), thickness=12)
+
+        # elif self.reliability_white_line > 50 and self.reliability_yellow_line <= 50:
+        #     centerx = np.subtract(self.right_fitx, 320)
+        #     pts_center = np.array([np.transpose(np.vstack([centerx, ploty]))])
+
+        #     cv2.polylines(color_warp_lines, np.int_([pts_center]), isClosed=False, color=(0, 255, 255), thickness=12)
+
+        # else:
+        #     self.is_center_x_exist = False
+        #     # TODO: stop
+        #     pass
+
+
+        # Combine the result with the original image
+        final = cv2.addWeighted(cv_image, 1, color_warp, 0.2, 0)
+        final = cv2.addWeighted(final, 1, color_warp_lines, 1, 0)
+
+        if self.pub_image_type == "compressed":
+            if self.is_center_x_exist == True:
+                # publishes lane center
+                msg_desired_center = Float64()
+                msg_desired_center.data = centerx.item(350)
+                self.pub_lane.publish(msg_desired_center)
+
+            self.pub_image_lane.publish(self.cvBridge.cv2_to_compressed_imgmsg(final, "jpg"))
+
+    def main(self):
+        rospy.spin()
+
+if __name__ == '__main__':
+    rospy.init_node('detect_lane')
+    node = DetectLane()
+    node.main()
