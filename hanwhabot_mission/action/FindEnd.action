@@ -1,8 +1,0 @@
-#goal definition
-bool get_end
----
-#result definition
-bool have_end
----
-#feedback
-string string_name

@@ -1,8 +1,0 @@
-#goal definition
-bool get_bomb
----
-#result definition
-bool have_bomb
----
-#feedback
-bool see_bomb

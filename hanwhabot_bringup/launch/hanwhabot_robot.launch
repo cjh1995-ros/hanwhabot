@@ -1,4 +1,0 @@
-<launch>
-  <include file="$(find md)/launch/md.launch"/>
-  <include file="$(find ydlidar_ros)/launch/X4.launch"/>
-</launch>

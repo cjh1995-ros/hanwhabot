@@ -1,8 +1,0 @@
-#goal definition
-bool open_door
----
-#result definition
-bool go_front
----
-#feedback
-bool find_door
