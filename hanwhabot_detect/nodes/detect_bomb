@@ -1,0 +1,20 @@
+!/usr/bin/env python
+import rospy
+from std_srvs.srv import *
+from geometry_msgs.msg import Twist
+# from darknet_msgs.msg import *
+from sensor_msgs import Image
+from cv_bridge import CvBridge
+from std_msgs.msg import Int16MultiArray
+import numpy as np
+
+class DetectBomb(object):
+    def __init__(self):
+        self.Detect_Bomb_Server = rospy.Service("detect_bomb", Trigger, self.find_bomb)
+
+        # self.req_Do_Action = rospy.Service()
+        self.sub_Depth_Image = rospy.Subscriber("/camera/depth/image_raw", Image, self.get_depth_img)
+        self.sub_Bomb_loc = rospy.Subscriber("darknet_ros", darknet_ros_msg, self.get_bomb_loc)
+
+        self.pub_do_action = rospy.Publisher("do_action", Int16MultiArray)
+        self.do_action_data = Int16MultiArray()

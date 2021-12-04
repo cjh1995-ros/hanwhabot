@@ -6,6 +6,8 @@ import cv2
 from cv_bridge import CvBridge
 from std_msgs.msg import UInt8, Float64
 from sensor_msgs.msg import Image, CompressedImage
+from std_srvs.srv import *
+
 
 class DetectLane():
     def __init__(self):
@@ -16,6 +18,9 @@ class DetectLane():
         self.hue_yellow_d, self.saturation_yellow_d, self.lightness_yellow_d = 41, 255, 255
 
         self.is_calibration_mode = False
+
+        self.client = rospy.ServiceProxy("main", SetBool)
+        self.data = SetBoolRequest()
 
         self.sub_image_type = "raw"         # you can choose image type "compressed", "raw"
         self.pub_image_type = "compressed"  # you can choose image type "compressed", "raw"
@@ -65,11 +70,16 @@ class DetectLane():
         elif self.sub_image_type == "raw":
             cv_image = self.cvBridge.imgmsg_to_cv2(image_msg, "bgr8")
 
-        # find White and Yellow Lanes
+        
         left_fraction, right_fraction, roi_fraction, cv_white_lane = self.maskWhiteLane(cv_image)
+        
+        # find roi stop lane is first
         if roi_fraction >= 10000:
-            """publish stop srv!"""
-            self.detect_num_of_stop_line += 1
+            # """publish stop srv!"""
+            self.data.data = True
+            self.result = self.client(self.data)
+            rospy.loginfo("service working")
+            rospy.sleep(0.5)
             
         try:
             if left_fraction > 3000 and right_fraction > 3000:
@@ -99,7 +109,7 @@ class DetectLane():
         # self.make_lane(cv_image, white_fraction, yellow_fraction)
         
         # PLZ Correct This!
-        self.make_lane(cv_image, left_white_fraction, right_white_fraction)
+        self.make_lane(cv_image, left_fraction, right_fraction)
 
     def maskWhiteLane(self, image):
         # Convert BGR to HSV

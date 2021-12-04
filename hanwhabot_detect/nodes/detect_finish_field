@@ -1,0 +1,60 @@
+#!/usr/bin/env python
+from __future__ import print_function
+import rospy
+import numpy as np
+import cv2
+from cv_bridge import CvBridge
+from std_msgs.msg import UInt8, Float64
+from sensor_msgs.msg import Image
+from hanwhabot_msgs.srv import *
+from std_srvs.srv import *
+
+class DetectFinishField(object):
+    def __init__(self):
+        self.detect_finish_field_server = rospy.Service("detect_finish_field_server", 
+                                    Trigger, 
+                                    self.get_finish_field_trigger)
+        self.image_sub = rospy.Subscriber("projected_img", 
+                                    Image, 
+                                    self.get_finish_field)
+        self.cvbridge = CvBridge()
+        self.data = SetBoolRequest()
+
+        # self.calibration = True
+        self.get_trigger = False
+        self.find_finish_field = False
+
+    def get_finish_field_trigger(self, req):
+        self.get_trigger = True
+        t = TriggerResponse()
+
+        if self.find_finish_field:
+            t.success = True
+            t.message = "find_finish_field"
+            return t
+        
+        t.success = False
+        t.message = "not yet find finish field"
+        return t
+
+    def get_finish_field(self, img):
+        if self.get_trigger:            
+            cv_img = self.cvbridge.imgmsg_to_cv2(img, "bgr8")
+            # find 
+            x, y, w, h = 100, 100, 100, 100
+            roi = cv_img[y:y+h, x:x+w]
+            gray_img = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # can calculate white pixel num. If it over threshold num, then it send sleep
+            # msg to stop.
+            _, masked_img = cv2.threshold(gray_img, 200, 255, cv2.THRESH_BINARY)
+            nonzero_num = np.count_nonzero(masked_img) # in roi?
+            if nonzero_num >=1000:
+                self.find_finish_field = True
+
+    def spin(self):
+        rospy.spin()
+
+if __name__ == "__main__":
+    rospy.init_node("detect_finish_field")
+    detect_stop_lane = DetectFinishField()
+    detect_stop_lane.spin()

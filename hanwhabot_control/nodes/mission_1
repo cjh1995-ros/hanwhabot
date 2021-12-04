@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+from re import T
+import rospy
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Int16, Bool
+from std_srvs.srv import *
+import time
+from geometry_msgs.msg import Twist
+
+def sleep_4sec():
+    time.sleep(4)
+
+# 조건을 충족하면 메인에 움직임을 요구할까?
+class MainController(object):
+    """어떤 미션이냐에 따라 subscribe하는 topic, service가 달라지게 하기"""
+    def __init__(self):
+        # self.mission_num = rospy.get_param("~mission_num")
+        # change cmd_vel and speed
+        self.publish_confirmed_vel = rospy.Publisher("speed", Twist, queue_size=5)
+        self.confirmed_vel = Twist()
+
+        # self.find_finish_line_sub = rospy.Subscriber("find_end_line", Bool, self.main_stop, queue_size=5)
+        
+        self.main_server = rospy.Service("main", SetBool, self.mission_1_srv)
+        self.stop_num = int(0)
+        # 차량 선 인식 후 pid 제어 한 뒤 보내는 속도를 subscribe하고 이에 대한 확정 속도를 publish 한다.
+        # subscribe가 find stop lane, find end line
+        self.subs_vel = rospy.Subscriber("cmd_vel", Twist, self.mission_1_msg, queue_size=3)
+        self.stop_trigger = False
+        rospy.on_shutdown(self.fnShutDown)
+
+    def mission_1_srv(self, req):
+        # num x 0.1 = sleep time. so If you want sleep 3 sec, then num should be 30.
+        # sending self.stop_num, client 마다 다른 값을 받을 수 있다.
+        # for mission 1, service 
+        # req: bool stop, 
+        # res: find_finish_trigger in here?
+        self.stop_trigger = req.data # change value with self.trigger True
+
+        y = SetBoolResponse()
+        y.success = True
+        y.message = "success with %d time"%self.stop_num
+        rospy.loginfo("main srv works")
+        return y
+
+    def mission_1_msg(self, vel):
+        # get subscribe angular speed and publish it as cmd_vel
+        # subscribe speed twist and make it cmd_vel. but we need to have trigger
+        # to talk with srv. when srv publishing 0 cmd_vel, we need to stop sending 
+        # data. so we have common trigger.
+        # confirmed_vel = Twist()
+        if not self.stop_trigger:
+            self.confirmed_vel.linear.x = vel.linear.x
+            self.confirmed_vel.linear.y = 0
+            self.confirmed_vel.linear.z = 0
+            self.confirmed_vel.angular.x = 0
+            self.confirmed_vel.angular.y = 0
+            self.confirmed_vel.angular.z = vel.angular.z
+            self.publish_confirmed_vel.publish(self.confirmed_vel)
+            rospy.loginfo("in common loop")
+            
+        elif self.stop_trigger :
+            self.confirmed_vel.linear.x = 0
+            self.confirmed_vel.linear.y = 0
+            self.confirmed_vel.linear.z = 0
+            self.confirmed_vel.angular.x = 0
+            self.confirmed_vel.angular.y = 0
+            self.confirmed_vel.angular.z = 0
+            self.publish_confirmed_vel.publish(self.confirmed_vel)
+            rospy.sleep(3.5)
+            rospy.loginfo("sleep in 3 sec\ntrigger will be False again")
+            self.stop_trigger = False
+            self.stop_num += 1
+
+        if self.stop_num == 3:
+            rospy.loginfo("waiting finish field server connect")
+            rospy.wait_for_service("detect_finish_field")
+            rospy.loginfo("service server connected!")
+            self.find_stop_field_client = rospy.ServiceProxy("detect_finish_field", Trigger)
+            self.get_result = TriggerResponse()
+            self.get_result = self.find_stop_field_client()
+            
+            if self.get_result.success:# success mean find stop field
+                rospy.loginfo("shutdown node")
+                rospy.signal_shutdown(self.get_result.message)
+
+            else:
+                pass
+
+    def fnShutDown(self):
+        rospy.loginfo("Shutting down. cmd_vel will be 0")
+        twist = Twist()
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.publish_confirmed_vel.publish(twist) 
+
+    def spin(self):
+        rospy.spin()
+        
+    
+if __name__ == "__main__":
+    rospy.init_node("main_controller")
+    main = MainController()
+    main.spin()
