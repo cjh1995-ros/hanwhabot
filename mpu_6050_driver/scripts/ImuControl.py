@@ -89,11 +89,11 @@ class ImuControl(object):
                 # make cmd_vel zero speed.
                 t = Trigger()
                 rospy.loginfo("wating for server")
-                rospy.wait_for_service("control_cmd_vel")
+                rospy.wait_for_service("imu_control")
                 rospy.loginfo("connected")
                 result = self.speed_client(t)
                 if result.success == True:
-                    rospy.signal_shutdown("It has all processed. So closing")
+                    # rospy.signal_shutdown("It has all processed. So closing")
                 else:
                     pass
 
@@ -101,3 +101,6 @@ class ImuControl(object):
         rospy.spin()
 
 if __name__ == '__main__':
+    rospy.init_node("imu_control")
+    imu_control = ImuControl()
+    imu_control.spin()
