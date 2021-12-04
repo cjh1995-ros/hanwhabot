@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+from logging import debug
+import rospy
+from geometry_msgs.msg import Twist
+from std_msgs.msg import Int16, Bool
+from std_srvs.srv import *
+import time
+from geometry_msgs.msg import Twist
+import sys
+# 조건을 충족하면 메인에 움직임을 요구할까?
+class MainController(object):
+    """어떤 미션이냐에 따라 subscribe하는 topic, service가 달라지게 하기"""
+    def __init__(self):
+        self.Imu_server = rospy.Service("imu_control", Trigger, self.imu_control)
+        self.Imu_num = 0
+        
+        self.Detect_Bomb_client = rospy.ServiceProxy("detect_bomb", Trigger)
+        self.get_bomb_trig = TriggerRequest()
+        self.req_one_time = 3
+
+        self.pub_vel = rospy.Publisher("cmd_vel", Twist, queue_size=3)
+        self.vel = Twist()
+        
+        rospy.on_shutdown(self.fnShutDown)
+        
+        self.work_box = rospy.ServiceProxy("bomb_box", Trigger)
+        self.work_box_trig = TriggerRequest()
+
+        self.debug_mode = False
+
+    def imu_control(self, req):
+        self.Imu_num += 1
+        res = TriggerResponse()
+        res.success = True
+        return y
+
+    def main(self):
+        # imu를 기준으로 한 것. 여기서 obj detection 을 넣는다면?
+        while rospy.is_shutdown():
+            self.vel.linear.y = 0.0
+            self.vel.linear.z = 0.0
+            self.vel.angular.x = 0.0
+            self.vel.angular.y = 0.0
+            self.vel.angular.z = 0.0
+
+            if self.debug_mode:
+                rospy.loginfo("current imu data = %d"%self.Imu_num)
+
+            if self.Imu_num == 0:
+                self.vel.linear.x = 0.5
+
+            elif self.Imu_num == 1 :
+                self.vel.linear.x = 0.1
+                self.pub_vel.publish(self.vel)
+
+                # if detect bomb, detect bomb node will control cmd_vel. 
+                # When box work is done, then this node will move back
+                if self.req_one_time:
+                    rospy.wait_for_service("detect_bomb")
+                    res = self.Detect_Bomb_client(self.get_bomb_trig)
+                    if res.success: 
+                        self.req_one_time = 0
+                    else:
+                        self.req_one_time -= 1
+
+            elif self.Imu_num == 2:
+                self.vel.linear.x = 0.0
+
+            self.pub_vel.publish(self.vel)
+
+    def fnShutDown(self):
+        rospy.loginfo("Shutting down. cmd_vel will be 0")
+        twist = Twist()
+        twist.linear.x = 0
+        twist.linear.y = 0
+        twist.linear.z = 0
+        twist.angular.x = 0
+        twist.angular.y = 0
+        twist.angular.z = 0
+        self.publish_confirmed_vel.publish(twist) 
+
+    def spin(self):
+        rospy.spin()
+        
+    
+if __name__ == "__main__":
+    rospy.init_node("main_controller")
+    main = MainController()
+    main.spin()

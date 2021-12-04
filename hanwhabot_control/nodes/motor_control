@@ -4,17 +4,24 @@
 from __future__ import print_function
 import rospy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Int16
+from std_msgs.msg import Int16, Bool
 from std_srvs.srv import *
 import time
+from geometry_msgs.msg import Twist
 
+def sleep_4sec():
+    time.sleep(4)
 
 # 조건을 충족하면 메인에 움직임을 요구할까?
 class MainController(object):
     """어떤 미션이냐에 따라 subscribe하는 topic, service가 달라지게 하기"""
     def __init__(self):
         self.mission_num = rospy.get_param("~mission_num")
-        self.publish_confirmed_vel = rospy.Publisher("vel_cmd", Twist, queue_size=5)
+        self.publish_confirmed_vel = rospy.Publisher("cmd_vel", Twist, queue_size=5)
+        self.confirmed_vel = Twist()
+
+        self.find_finish_line_sub = rospy.Subscriber("find_end_line", Bool, self.main_stop, queue_size=5)
+        
         self.pub_exam = rospy.Publisher("test", Int16, queue_size=1)
         # self.sub_nothing = rospy.Subscriber("none", Int16, self.test, queue_size=1)
         # 그냥 미션에 따라 다른 서버를 만들까?
@@ -22,11 +29,14 @@ class MainController(object):
         self.r = rospy.Rate(10)
 
         if self.mission_num == 1:
-            # mission 1 의 핵심은 제때 3초간 멈추는 것. 
+            # mission 1 의 핵심은 제때 3초간 멈추는 것. 속도 제어 요소. lane 에 의한 속도(angular.z = 0.10 rad/s), stop lane 에 의한 속도(linear.x = 0 m/s)
             self.main_server = rospy.Service("main", SetBool, self.mission_1_srv)
             # self.motor_control_param = rospy.Subscriber("")
-            self.stop_num = 0
-            self.sleep = rospy.Rate(0.25)
+            self.stop_num = int(0)
+            # 차량 선 인식 후 pid 제어 한 뒤 보내는 속도를 subscribe하고 이에 대한 확정 속도를 publish 한다.
+            # subscribe가 find stop lane, find end line
+            self.subs_vel = rospy.Subscriber("speed", Twist, self.mission_1_msg, queue_size=3)
+            self.trigger = False
 
         elif self.mission_num == 3:
             # mission 3 의 핵심은 imu 를 이용한 자세 교정. 자세 교정에 따른 cmd_vel 값 정하기.
@@ -37,6 +47,8 @@ class MainController(object):
             # if distance > 30cm, signal will be true and will be sended by service
             self.dist_in_range = False
             # after this, publish cmd_vel very slow.
+            # subscribe가 imu signal, find signal, done job signal
+            self.subs_vel = rospy.Subscriber("speed", Twist, self.get_speed, queue_size=3)
             
         elif self.mission_num == 4:
             # mission 4 의 핵심은 blue box 를 찾고, 이를 치우는 행위 하기. 그 후 포즈를 정상적으로
@@ -47,24 +59,74 @@ class MainController(object):
             self.find_BLUE_BOX = False
             self.find_Door = False
             self.do_action = False
+            self.subs_vel = rospy.Subscriber("speed", Twist, self.get_speed, queue_size=3)
 
     def mission_1_srv(self, req):
-        """req = sleep time"""
+        # num x 0.1 = sleep time. so If you want sleep 3 sec, then num should be 30.
+        # sending self.stop_num, client 마다 다른 값을 받을 수 있다.
+        # for mission 1, service 
+        # req: bool stop, 
+        # res: find_finish_trigger in here?
         num = 0
-        while req.data:
-            x = Int16()
-            x.data = 2
-            self.pub_exam.publish(x)
+        self.trigger = req.data # change value with self.trigger True
+        while self.trigger:
+            # example
+            # x = Int16()
+            # x.data = 2
+            # self.pub_exam.publish(x)
+            self.confirmed_vel.linear.x = 0
+            self.confirmed_vel.linear.y = 0
+            self.confirmed_vel.linear.z = 0
+            self.confirmed_vel.angular.x = 0
+            self.confirmed_vel.angular.y = 0
+            self.confirmed_vel.angular.z = 0
+            self.publish_confirmed_vel(self.confirmed_vel)
             num += 1
             self.r.sleep()
-            if num == 120:
-                break
+            if num == 35: break # 3.5sec
+
+        self.trigger = False
+        self.stop_num += 1
+
+        if self.stop_num == 3:
+            rospy.wait_for_service("find_stop_field")
+            # using trigger to wake up find stop field node
+            self.find_stop_field_client = rospy.ServiceProxy("find_stop_field", Trigger)
+            self.get_result = TriggerResponse()
+            self.get_result = self.find_stop_field_client()
+            if self.get_result.success:
+                print(self.get_result.message)
+
+            # client find end line 요청 작성.
+        else :
+            pass
+        # if client get 3. then it will trying to find end line.
+        # something = StopNumSrvResponse()
+        # self.num += 1
+        # something.data = self.num # 거기서 값을 받아서 find end line node를 실행하게함.
+        # return something
 
         y = SetBoolResponse()
         y.success = True
-        y.message = "success"
-        print("server down")
+        y.message = "success with %d time"%self.stop_num
         return y
+
+    def mission_1_msg(self, vel):
+        # get subscribe angular speed and publish it as cmd_vel
+        # subscribe speed twist and make it cmd_vel. but we need to have trigger
+        # to talk with srv. when srv publishing 0 cmd_vel, we need to stop sending 
+        # data. so we have common trigger.
+        if not self.trigger:
+            self.confirmed_vel.linear.x = vel.linear.x
+            self.confirmed_vel.linear.y = 0
+            self.confirmed_vel.linear.z = 0
+            self.confirmed_vel.angular.x = 0
+            self.confirmed_vel.angular.y = 0
+            self.confirmed_vel.angular.z = vel.angular.z
+            self.publish_confirmed_vel(self.confirmed_vel)
+            
+        else :
+            rospy.loginfo("Waiting for srv end.")
 
     def mission_3_srv(self, req):
         """req = """
@@ -73,11 +135,32 @@ class MainController(object):
     def mission_4_srv(self, req):
         pass
 
+    def main_stop(self, msg):
+        # sending stop topic during 3sec and end
+        num = 0
+        if msg.data:
+            # publish stop data.
+            while rospy.is_shutdown():                
+                self.confirmed_vel.linear.x = 0
+                self.confirmed_vel.linear.y = 0
+                self.confirmed_vel.linear.z = 0
+                self.confirmed_vel.angular.x = 0
+                self.confirmed_vel.angular.y = 0
+                self.confirmed_vel.angular.z = 0
+                self.publish_confirmed_vel(self.confirmed_vel)
+                self.r.sleep()
+                num += 1
+                if num == 30:
+                    break
+        
+    def get_speed(self, data):
+        pass
+
     def spin(self):
         rospy.spin()
         
+    
 if __name__ == "__main__":
-
     rospy.init_node("main_controller")
     main = MainController()
     main.spin()
