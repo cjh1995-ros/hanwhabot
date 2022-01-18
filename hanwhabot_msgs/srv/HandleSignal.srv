@@ -1,0 +1,7 @@
+#req
+bool trig
+---
+#res
+bool success
+float32 distance
+float32 deg
